@@ -23,18 +23,19 @@ schedules:
     enabled: true
 
 settings:
-  interval: 5
-  # Tighten to 2s around the release so attempts land densely at 20:00.
-  burst_interval: 2
-  burst_from: "19:58:00"
+  interval: 2.0
+  # The first booking POST is held until 20:00:00.  Retry at most once per
+  # second during the opening burst; rate-limit responses back off smoothly.
+  burst_interval: 1.0
+  burst_from: "20:00:00"
   burst_to: "20:05:00"
+  rate_limit_max_interval: 12.0
+  retry_jitter_ratio: 0.15
   # Upper bound only; booking_deadline is what actually ends the run.
   max_try_times: 400
   auto_relogin: true
-  # Seats are released at 20:00 sharp. Start 5 minutes early so a request is
-  # already in flight when the window opens, without spending long stretches
-  # of pointless traffic beforehand.
-  booking_open_time: "19:55:00"
+  # Never spend the request budget before seats are released.
+  booking_open_time: "20:00:00"
   # Stop retrying at 20:15, as the pre-rewrite script did. A run dispatched
   # after this exits without booking instead of firing hopeless requests.
   booking_deadline: "20:15:00"
