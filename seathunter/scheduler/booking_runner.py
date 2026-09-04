@@ -6,6 +6,7 @@ Extracted from main.py:157-172 (startNow) and killer.py:416-422 (run).
 from __future__ import annotations
 
 import logging
+import random
 from datetime import datetime
 from time import sleep
 from typing import List, Callable, Optional
@@ -31,10 +32,12 @@ class BookingRunner:
     """Executes booking attempts with retry logic."""
 
     def __init__(self, api_client: ApiClient, session_manager: SessionManager,
-                 interval: int = 5, max_try_times: int = 10,
-                 burst_interval: Optional[int] = None,
+                 interval: float = 5, max_try_times: int = 10,
+                 burst_interval: Optional[float] = None,
                  burst_from: Optional[str] = None,
-                 burst_to: Optional[str] = None):
+                 burst_to: Optional[str] = None,
+                 rate_limit_max_interval: float = 12.0,
+                 retry_jitter_ratio: float = 0.15):
         self.api = api_client
         self.session_mgr = session_manager
         self.interval = interval
@@ -42,9 +45,12 @@ class BookingRunner:
         self.burst_interval = burst_interval
         self.burst_from = _parse_time(burst_from)
         self.burst_to = _parse_time(burst_to)
+        self.rate_limit_max_interval = max(float(rate_limit_max_interval), 0.0)
+        self.retry_jitter_ratio = max(float(retry_jitter_ratio), 0.0)
+        self._adaptive_interval = 0.0
         self._cancelled = False
 
-    def current_interval(self) -> int:
+    def current_interval(self) -> float:
         """Seconds to wait before the next attempt.
 
         Retries tighten inside the burst window so attempts land densely
@@ -56,6 +62,45 @@ class BookingRunner:
         if self.burst_from <= now < self.burst_to:
             return self.burst_interval
         return self.interval
+
+    @staticmethod
+    def _is_rate_limited(result: BookingResult) -> bool:
+        return (
+            str(result.code) in {"1", "429"}
+            or "请求太频繁" in str(result.message)
+            or "Too Many Requests" in str(result.message)
+        )
+
+    def retry_delay(self, results: List[BookingResult]) -> float:
+        """Return a smooth, jittered delay based on the latest responses.
+
+        Rate-limit responses multiplicatively increase the delay.  Ordinary
+        responses release the penalty gradually instead of snapping back to a
+        burst, which avoids synchronized request spikes from multiple runners.
+        """
+        base = max(float(self.current_interval()), 0.01)
+        cap = max(self.rate_limit_max_interval, base)
+        if any(self._is_rate_limited(result) for result in results):
+            previous = max(self._adaptive_interval, base)
+            self._adaptive_interval = min(
+                cap,
+                max(base * 2.0, previous * 2.0),
+            )
+        else:
+            previous = max(self._adaptive_interval, base)
+            self._adaptive_interval = max(base, previous * 0.75)
+
+        jitter = random.uniform(
+            0.0, self._adaptive_interval * self.retry_jitter_ratio
+        )
+        return min(cap, self._adaptive_interval + jitter)
+
+    def _interruptible_sleep(self, seconds: float) -> None:
+        remaining = max(float(seconds), 0.0)
+        while remaining > 0 and not self._cancelled:
+            step = min(remaining, 0.1)
+            sleep(step)
+            remaining -= step
 
     def cancel(self):
         """Cancel the current booking run."""
@@ -77,6 +122,7 @@ class BookingRunner:
             List of BookingResult for all attempts.
         """
         self._cancelled = False
+        self._adaptive_interval = 0.0
         results = []
 
         # Without a uid the request cannot name a booker, so no number of
@@ -103,6 +149,7 @@ class BookingRunner:
             logger.info("Booking attempt %d/%d for %s",
                        retry + 1, self.max_try_times,
                        target_date.strftime("%Y-%m-%d"))
+            round_results = []
 
             for i, plan in enumerate(plans):
                 if self._cancelled:
@@ -118,12 +165,25 @@ class BookingRunner:
 
                 result = self._book_single_plan(plan, begin_time, seat_ids, booker_uids, target_date)
                 results.append(result)
+                round_results.append(result)
 
                 if on_result:
                     on_result(result)
 
                 if result.success:
-                    logger.info("Booking successful: %s - %s", plan.id, plan.room_name)
+                    if result.already_reserved:
+                        logger.info(
+                            "Reservation already existed; this run did not create it. "
+                            "Stopping retries for %s - %s",
+                            plan.id,
+                            plan.room_name,
+                        )
+                    else:
+                        logger.info(
+                            "Booking created by this run: %s - %s",
+                            plan.id,
+                            plan.room_name,
+                        )
                     return results
 
                 logger.warning("Plan %s failed: %s", plan.id, result.message)
@@ -132,13 +192,9 @@ class BookingRunner:
                     break
 
             if not self._cancelled and retry < self.max_try_times - 1:
-                wait_seconds = self.current_interval()
-                logger.debug("Waiting %ds before retry...", wait_seconds)
-                # Interruptible sleep
-                for _ in range(wait_seconds):
-                    if self._cancelled:
-                        break
-                    sleep(1)
+                wait_seconds = self.retry_delay(round_results)
+                logger.info("Waiting %.3fs before retry", wait_seconds)
+                self._interruptible_sleep(wait_seconds)
 
         return results
 

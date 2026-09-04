@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Iterable, List
+from typing import Callable, Iterable, List, Optional
 
 from seathunter.models.schedule import BOOKING_ADVANCE_DAYS, Schedule
 
@@ -49,11 +49,24 @@ def booking_open_at(now: datetime, open_time: str,
     )
 
 
-def wait_until(target: datetime, log_interval: int = 60) -> None:
-    """Wait for a wall-clock time while periodically reporting remaining time."""
+def wait_until(target: datetime, log_interval: int = 60,
+               precision: float = 0.01,
+               now: Optional[Callable[[], datetime]] = None,
+               sleep: Optional[Callable[[float], None]] = None) -> None:
+    """Wait until ``target`` without returning before the wall-clock boundary.
+
+    Long waits use coarse sleeps.  The final quarter-second is checked in
+    short ticks so the first booking call can begin close to the release
+    boundary without sending speculative requests before it.
+    """
+    if precision <= 0:
+        raise ValueError("precision must be positive")
+
+    now_fn = now or datetime.now
+    sleep_fn = sleep or time.sleep
     last_reported_minute = None
     while True:
-        remaining = (target - datetime.now()).total_seconds()
+        remaining = (target - now_fn()).total_seconds()
         if remaining <= 0:
             return
 
@@ -61,7 +74,11 @@ def wait_until(target: datetime, log_interval: int = 60) -> None:
         if remaining_minute != last_reported_minute:
             logger.info("Waiting for booking window: %.0f seconds remaining", remaining)
             last_reported_minute = remaining_minute
-        time.sleep(min(remaining, 5.0))
+        if remaining > 0.25:
+            delay = min(5.0, max(precision, remaining - 0.25))
+        else:
+            delay = min(precision, remaining)
+        sleep_fn(delay)
 
 
 def append_github_summary(lines: Iterable[str]) -> None:

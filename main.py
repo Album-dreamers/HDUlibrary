@@ -365,18 +365,14 @@ def run_once(config_path: str) -> int:
         append_github_summary(["## SeatHunter", "", f"Login failed: {error_type}"])
         return 1
     if not session_mgr.uid:
-        # Seen in production: login reports success, cookies save, but no uid
-        # arrives and every booking is rejected with an empty message. It has
-        # also been seen to clear on its own within the hour, so keep waiting
-        # and let the pre-window refresh try again rather than giving up here.
-        logger.warning(
-            "Login succeeded but returned no uid; bookings cannot identify "
-            "the account. Will retry the session before the window opens."
-        )
-    else:
-        logger.info("Login successful: uid=%s", session_mgr.uid)
-
-    known_uid = session_mgr.uid
+        logger.error("Login did not produce a usable uid; refusing to wait")
+        append_github_summary([
+            "## SeatHunter",
+            "",
+            "Login validation failed: the library session returned no uid.",
+        ])
+        return 1
+    logger.info("Login verified: uid=%s", session_mgr.uid)
 
     if datetime.now() < open_at:
         logger.info(
@@ -397,24 +393,18 @@ def run_once(config_path: str) -> int:
                     ["## SeatHunter", "", f"Session refresh failed: {error_type}"]
                 )
                 return 1
-            if not session_mgr.uid and known_uid:
-                # A Playwright re-login blanks the uid when its lookup fails.
-                # The uid identifies the account, not the session, so the one
-                # from earlier in this run is still the right value.
-                logger.warning("Session refresh lost the uid; keeping %s", known_uid)
-                session_mgr.uid = known_uid
-            logger.info("Session refreshed: uid=%s", session_mgr.uid or "(none)")
+            if not session_mgr.uid:
+                logger.error("Session refresh returned no uid; refusing to book")
+                append_github_summary([
+                    "## SeatHunter",
+                    "",
+                    "Session refresh failed validation: no uid.",
+                ])
+                return 1
+            logger.info("Session refreshed and verified: uid=%s", session_mgr.uid)
     else:
         logger.warning("Booking window has already opened; starting immediately")
 
-    # Last chance to obtain a uid: a run dispatched after the refresh point
-    # skips that step, and an empty uid has been seen to clear by itself.
-    # Done before the final wait so a slow re-login does not eat the lead.
-    if not session_mgr.uid:
-        logger.warning("No uid before booking; retrying the session once")
-        session_mgr.login()
-        if not session_mgr.uid and known_uid:
-            session_mgr.uid = known_uid
     if not session_mgr.uid:
         message = (
             "No uid available; a booking request cannot identify the account, "
@@ -435,11 +425,13 @@ def run_once(config_path: str) -> int:
     runner = BookingRunner(
         api_client=ApiClient(session_mgr),
         session_manager=session_mgr,
-        interval=int(settings["interval"]),
+        interval=float(settings["interval"]),
         max_try_times=int(settings["max_try_times"]),
         burst_interval=settings.get("burst_interval"),
         burst_from=settings.get("burst_from"),
         burst_to=settings.get("burst_to"),
+        rate_limit_max_interval=float(settings.get("rate_limit_max_interval", 12.0)),
+        retry_jitter_ratio=float(settings.get("retry_jitter_ratio", 0.15)),
     )
     history = HistoryLogger()
 
@@ -458,13 +450,22 @@ def run_once(config_path: str) -> int:
     )
     successful = next((result for result in results if result.success), None)
     if successful:
-        append_github_summary([
-            "## SeatHunter booking succeeded",
-            "",
-            f"- Target date: {target_date:%Y-%m-%d}",
-            f"- Plan: {successful.plan_id}",
-            f"- Seat: {successful.room_name}-{successful.seat_num}",
-        ])
+        if successful.already_reserved:
+            append_github_summary([
+                "## SeatHunter found an existing reservation",
+                "",
+                "- This run did not create the reservation.",
+                f"- Target date: {target_date:%Y-%m-%d}",
+                f"- API result: {successful.message}",
+            ])
+        else:
+            append_github_summary([
+                "## SeatHunter booking created",
+                "",
+                f"- Target date: {target_date:%Y-%m-%d}",
+                f"- Plan: {successful.plan_id}",
+                f"- Seat: {successful.room_name}-{successful.seat_num}",
+            ])
         return 0
 
     last_message = results[-1].message if results else "No booking request was made"

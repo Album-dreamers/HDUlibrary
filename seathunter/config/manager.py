@@ -115,6 +115,8 @@ class ConfigManager:
             "max_try_times": 10,
             "auto_relogin": True,
             "booking_open_time": "20:00:00",
+            "rate_limit_max_interval": 12.0,
+            "retry_jitter_ratio": 0.15,
         }
         settings = self.config.get("settings", {})
         return {**defaults, **settings}

@@ -17,6 +17,8 @@ settings:
   max_try_times: 10
   auto_relogin: true
   booking_open_time: "20:00:00"
+  rate_limit_max_interval: 12.0
+  retry_jitter_ratio: 0.15
 
 api:
   base_url: "https://hdu.huitu.zhishulib.com"

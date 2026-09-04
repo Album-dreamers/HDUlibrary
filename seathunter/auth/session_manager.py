@@ -6,6 +6,7 @@ Combines cookie-based login and Playwright login with auto-relogin support.
 from __future__ import annotations
 
 import logging
+from time import sleep
 from typing import Optional, Tuple, Dict
 
 import requests
@@ -16,6 +17,8 @@ from seathunter.config.manager import ConfigManager
 from seathunter.platform_.paths import get_config_path
 
 logger = logging.getLogger("seathunter.auth")
+
+LOGIN_ERR_SESSION = "session"
 
 
 class SessionManager:
@@ -133,26 +136,62 @@ class SessionManager:
         if not self.uid:
             self._fetch_user_info_from_api()
 
+        # Reaching the library domain is not enough.  A usable booking session
+        # must be able to identify the account through the library API.
+        if not self.uid:
+            logger.error(
+                "CAS redirect completed, but the library session is not ready: "
+                "user info returned no uid"
+            )
+            self.cookie_store.clear()
+            return (False, LOGIN_ERR_SESSION)
+
         # Save cookies
         self.cookie_store.save(cookies, self.uid, self.name)
         logger.info("Login successful (cookies saved)")
         return (True, None)
 
-    def _fetch_user_info_from_api(self):
-        """Fallback: get user info via API call."""
-        try:
-            params = {
-                "space_category[category_id]": "591",
-                "space_category[content_id]": "3",
-            }
-            url = self.base_url + "/Seat/Index/searchSeats"
-            resp = self.session.get(url=url, params=params, timeout=15)
-            data = resp.json()
-            if isinstance(data, dict) and data.get("data"):
-                self.uid = str(data["data"].get("uid", ""))
-                self.name = data["data"].get("uname", "")
-        except Exception:
-            pass
+    def _fetch_user_info_from_api(self, attempts: int = 5,
+                                  retry_delay: float = 0.5,
+                                  max_retry_delay: float = 4.0) -> bool:
+        """Obtain and validate the account uid without repeating CAS login."""
+        params = {
+            "space_category[category_id]": "591",
+            "space_category[content_id]": "3",
+        }
+        url = self.base_url + "/Seat/Index/searchSeats"
+
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = self.session.get(url=url, params=params, timeout=15)
+                data = resp.json()
+                if isinstance(data, dict) and data.get("data"):
+                    uid = str(data["data"].get("uid", ""))
+                    if uid:
+                        self.uid = uid
+                        self.name = data["data"].get("uname", "")
+                        return True
+                logger.warning(
+                    "User-info validation attempt %d/%d returned no uid "
+                    "(status=%s, content-type=%s)",
+                    attempt,
+                    attempts,
+                    getattr(resp, "status_code", "unknown"),
+                    getattr(resp, "headers", {}).get("Content-Type", "unknown"),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "User-info validation attempt %d/%d failed: %s",
+                    attempt,
+                    attempts,
+                    exc,
+                )
+
+            if attempt < attempts:
+                delay = min(max_retry_delay, retry_delay * (2 ** (attempt - 1)))
+                sleep(delay)
+
+        return False
 
 
 def json_dumps_truncate(data, max_len=200):

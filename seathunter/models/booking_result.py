@@ -17,8 +17,21 @@ class BookingResult:
     room_name: Optional[str] = None
     target_date: Optional[str] = None
 
+    @property
+    def already_reserved(self) -> bool:
+        """The desired state exists, but this request did not create it."""
+        return self.success and "已有预约" in str(self.message)
+
+    @property
+    def created_by_this_run(self) -> bool:
+        """The booking API confirms that this request created a reservation."""
+        return self.success and str(self.code) == "ok"
+
     def __str__(self) -> str:
-        status = "成功" if self.success else "失败"
+        if self.already_reserved:
+            status = "已有预约（非本次创建）"
+        else:
+            status = "成功" if self.success else "失败"
         parts = [f"[{status}]"]
         if self.plan_id:
             parts.append(f"方案: {self.plan_id}")

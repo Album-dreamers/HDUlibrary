@@ -119,28 +119,29 @@ class UidRecoveryTests(unittest.TestCase):
         return code, session
 
     def test_uid_present_books_normally(self):
-        code, session = self._run(["410676"])
+        code, session = self._run(["410676", "410676"])
         self.assertEqual(FakeRunner.instances[0].booked_with, "410676")
 
-    def test_uid_missing_then_recovered_at_refresh_still_books(self):
-        # Login gives nothing; the pre-window refresh gets the uid.
+    def test_initial_login_without_uid_stops_before_waiting(self):
         code, session = self._run(["", "410676"])
-        self.assertTrue(FakeRunner.instances, "booking was skipped entirely")
-        self.assertEqual(FakeRunner.instances[0].booked_with, "410676")
+        self.assertEqual(code, 1)
+        self.assertEqual(session.login_calls, 1)
+        self.assertEqual(FakeRunner.instances, [])
 
-    def test_refresh_blanking_a_known_uid_keeps_the_old_one(self):
-        # Login works, the refresh's Playwright path blanks the uid.
+    def test_refresh_without_uid_stops_without_booking(self):
         code, session = self._run(["410676", ""])
-        self.assertEqual(FakeRunner.instances[0].booked_with, "410676")
+        self.assertEqual(code, 1)
+        self.assertEqual(session.login_calls, 2)
+        self.assertEqual(FakeRunner.instances, [])
 
     def test_uid_never_arrives_sends_no_requests(self):
         code, session = self._run(["", "", ""])
         self.assertEqual(code, 1)
         self.assertEqual(FakeRunner.instances, [])
 
-    def test_missing_uid_is_retried_three_times_before_giving_up(self):
+    def test_missing_uid_does_not_repeat_cas_login(self):
         code, session = self._run(["", "", ""])
-        self.assertEqual(session.login_calls, 3)
+        self.assertEqual(session.login_calls, 1)
 
 
 if __name__ == "__main__":
