@@ -365,16 +365,18 @@ def run_once(config_path: str) -> int:
         append_github_summary(["## SeatHunter", "", f"Login failed: {error_type}"])
         return 1
     if not session_mgr.uid:
-        # Seen in production: login reports success, cookies save, but the uid
-        # never arrives, and every booking is rejected with an empty message.
-        message = (
+        # Seen in production: login reports success, cookies save, but no uid
+        # arrives and every booking is rejected with an empty message. It has
+        # also been seen to clear on its own within the hour, so keep waiting
+        # and let the pre-window refresh try again rather than giving up here.
+        logger.warning(
             "Login succeeded but returned no uid; bookings cannot identify "
-            "the account. Check the credentials or the login flow."
+            "the account. Will retry the session before the window opens."
         )
-        logger.error(message)
-        append_github_summary(["## SeatHunter", "", message])
-        return 1
-    logger.info("Login successful: uid=%s", session_mgr.uid)
+    else:
+        logger.info("Login successful: uid=%s", session_mgr.uid)
+
+    known_uid = session_mgr.uid
 
     if datetime.now() < open_at:
         logger.info(
@@ -395,16 +397,40 @@ def run_once(config_path: str) -> int:
                     ["## SeatHunter", "", f"Session refresh failed: {error_type}"]
                 )
                 return 1
-            if not session_mgr.uid:
-                logger.error("Session refresh returned no uid; skipping booking")
-                append_github_summary(
-                    ["## SeatHunter", "", "Session refresh returned no uid"]
-                )
-                return 1
-            logger.info("Session refreshed: uid=%s", session_mgr.uid)
-        wait_until(open_at)
+            if not session_mgr.uid and known_uid:
+                # A Playwright re-login blanks the uid when its lookup fails.
+                # The uid identifies the account, not the session, so the one
+                # from earlier in this run is still the right value.
+                logger.warning("Session refresh lost the uid; keeping %s", known_uid)
+                session_mgr.uid = known_uid
+            logger.info("Session refreshed: uid=%s", session_mgr.uid or "(none)")
     else:
         logger.warning("Booking window has already opened; starting immediately")
+
+    # Last chance to obtain a uid: a run dispatched after the refresh point
+    # skips that step, and an empty uid has been seen to clear by itself.
+    # Done before the final wait so a slow re-login does not eat the lead.
+    if not session_mgr.uid:
+        logger.warning("No uid before booking; retrying the session once")
+        session_mgr.login()
+        if not session_mgr.uid and known_uid:
+            session_mgr.uid = known_uid
+    if not session_mgr.uid:
+        message = (
+            "No uid available; a booking request cannot identify the account, "
+            "so no attempt can succeed. Sending none."
+        )
+        logger.error(message)
+        append_github_summary([
+            "## SeatHunter booking skipped",
+            "",
+            f"- Target date: {target_date:%Y-%m-%d}",
+            f"- {message}",
+        ])
+        return 1
+
+    if datetime.now() < open_at:
+        wait_until(open_at)
 
     runner = BookingRunner(
         api_client=ApiClient(session_mgr),
