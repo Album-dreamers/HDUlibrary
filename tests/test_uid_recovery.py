@@ -39,6 +39,10 @@ settings:
   interval: 0
   max_try_times: 3
   session_refresh_lead_seconds: 60
+  login_max_attempts: 3
+  login_retry_initial_delay_seconds: 0
+  login_retry_max_delay_seconds: 0
+  login_retry_jitter_ratio: 0
   booking_open_time: "{open_time}"
   booking_deadline: "{deadline}"
 api:
@@ -123,26 +127,27 @@ class UidRecoveryTests(unittest.TestCase):
         code, session = self._run(["410676", "410676"])
         self.assertEqual(FakeRunner.instances[0].booked_with, "410676")
 
-    def test_initial_login_without_uid_stops_before_waiting(self):
-        code, session = self._run(["", "410676"])
+    def test_initial_login_without_uid_retries_then_books(self):
+        code, session = self._run(["", "410676", "410676"])
         self.assertEqual(code, 1)
-        self.assertEqual(session.login_calls, 1)
-        self.assertEqual(FakeRunner.instances, [])
+        self.assertEqual(session.login_calls, 3)
+        self.assertEqual(FakeRunner.instances[0].booked_with, "410676")
 
     def test_refresh_without_uid_stops_without_booking(self):
-        code, session = self._run(["410676", ""])
+        code, session = self._run(["410676", "", "", ""])
         self.assertEqual(code, 1)
-        self.assertEqual(session.login_calls, 2)
+        self.assertEqual(session.login_calls, 4)
         self.assertEqual(FakeRunner.instances, [])
 
     def test_uid_never_arrives_sends_no_requests(self):
         code, session = self._run(["", "", ""])
         self.assertEqual(code, 1)
+        self.assertEqual(session.login_calls, 3)
         self.assertEqual(FakeRunner.instances, [])
 
-    def test_missing_uid_does_not_repeat_cas_login(self):
+    def test_missing_uid_uses_only_the_bounded_attempt_count(self):
         code, session = self._run(["", "", ""])
-        self.assertEqual(session.login_calls, 1)
+        self.assertEqual(session.login_calls, 3)
 
 
 if __name__ == "__main__":

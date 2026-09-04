@@ -282,6 +282,7 @@ def run_login_check(config_path: str) -> int:
     from seathunter.logging_.logger import setup_logging
     from seathunter.config.manager import ConfigManager
     from seathunter.auth.session_manager import SessionManager
+    from seathunter.auth.login_retry import login_with_retry
     from seathunter.scheduler.one_shot import append_github_summary
 
     logger = setup_logging()
@@ -298,7 +299,14 @@ def run_login_check(config_path: str) -> int:
 
     session_mgr = SessionManager(config)
     session_mgr.init_session()
-    success, error_type = session_mgr.login()
+    settings = config.get_settings()
+    success, error_type = login_with_retry(
+        session_mgr,
+        max_attempts=int(settings.get("login_max_attempts", 3)),
+        initial_delay=float(settings.get("login_retry_initial_delay_seconds", 30.0)),
+        max_delay=float(settings.get("login_retry_max_delay_seconds", 90.0)),
+        jitter_ratio=float(settings.get("login_retry_jitter_ratio", 0.15)),
+    )
     if not success or not session_mgr.uid:
         reason = error_type or "session returned no uid"
         logger.error("Login check failed: %s", reason)
@@ -333,6 +341,7 @@ def run_once(config_path: str) -> int:
     from seathunter.logging_.history import HistoryLogger
     from seathunter.config.manager import ConfigManager
     from seathunter.auth.session_manager import SessionManager
+    from seathunter.auth.login_retry import login_with_retry
     from seathunter.api.client import ApiClient
     from seathunter.scheduler.booking_runner import BookingRunner
     from seathunter.scheduler.one_shot import (
@@ -414,7 +423,13 @@ def run_once(config_path: str) -> int:
 
     session_mgr = SessionManager(config)
     session_mgr.init_session()
-    success, error_type = session_mgr.login()
+    success, error_type = login_with_retry(
+        session_mgr,
+        max_attempts=int(settings.get("login_max_attempts", 3)),
+        initial_delay=float(settings.get("login_retry_initial_delay_seconds", 30.0)),
+        max_delay=float(settings.get("login_retry_max_delay_seconds", 90.0)),
+        jitter_ratio=float(settings.get("login_retry_jitter_ratio", 0.15)),
+    )
     if not success:
         logger.error("Login failed: %s", error_type)
         append_github_summary(["## SeatHunter", "", f"Login failed: {error_type}"])
@@ -444,7 +459,15 @@ def run_once(config_path: str) -> int:
         )
         if datetime.now() < refresh_at:
             wait_until(refresh_at)
-            success, error_type = session_mgr.login()
+            success, error_type = login_with_retry(
+                session_mgr,
+                max_attempts=int(settings.get("login_max_attempts", 3)),
+                initial_delay=float(
+                    settings.get("login_retry_initial_delay_seconds", 30.0)
+                ),
+                max_delay=float(settings.get("login_retry_max_delay_seconds", 90.0)),
+                jitter_ratio=float(settings.get("login_retry_jitter_ratio", 0.15)),
+            )
             if not success:
                 logger.error("Session refresh failed: %s", error_type)
                 append_github_summary(

@@ -18,6 +18,10 @@ settings:
   auto_relogin: true
   booking_open_time: "20:00:00"
   session_refresh_lead_seconds: 300
+  login_max_attempts: 3
+  login_retry_initial_delay_seconds: 30.0
+  login_retry_max_delay_seconds: 90.0
+  login_retry_jitter_ratio: 0.15
   rate_limit_max_interval: 12.0
   retry_jitter_ratio: 0.15
 

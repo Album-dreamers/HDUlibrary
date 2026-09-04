@@ -16,6 +16,20 @@ logger = logging.getLogger("seathunter.auth")
 
 LOGIN_ERR_NETWORK = "network"
 LOGIN_ERR_AUTH = "auth"
+LOGIN_ERR_CREDENTIALS = "credentials"
+
+
+def _is_credential_error(page_text: str) -> bool:
+    """Identify explicit credential rejection without classifying generic CAS errors."""
+    normalized = str(page_text).casefold()
+    markers = (
+        "用户名或密码错误",
+        "账号或密码错误",
+        "密码错误",
+        "invalid username or password",
+        "incorrect username or password",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def playwright_login(username: str, password: str, library_url: str,
@@ -32,7 +46,7 @@ def playwright_login(username: str, password: str, library_url: str,
     Returns:
         (success, error_type, cookies, uid, name) tuple.
         - success: Whether login succeeded.
-        - error_type: "network", "auth", or None.
+        - error_type: "network", "auth", "credentials", or None.
         - cookies: List of cookie dicts from Playwright.
         - uid: User ID string.
         - name: User display name.
@@ -152,9 +166,18 @@ def playwright_login(username: str, password: str, library_url: str,
 
             current_url = page.url
             if "huitu.zhishulib.com" not in current_url:
+                try:
+                    page_text = await page.locator("body").inner_text(timeout=3000)
+                except Exception:
+                    page_text = ""
                 logger.error("Login may have failed, current URL: %s", current_url)
                 await browser.close()
-                return False, None, "", "", "auth"
+                error_type = (
+                    LOGIN_ERR_CREDENTIALS
+                    if _is_credential_error(page_text)
+                    else LOGIN_ERR_AUTH
+                )
+                return False, None, "", "", error_type
 
             # Extract cookies
             all_cookies = await context.cookies()
@@ -195,6 +218,8 @@ def playwright_login(username: str, password: str, library_url: str,
     if not success or not cookies:
         if err and any(k in str(err) for k in ["CONNECTION_RESET", "CONNECTION_REFUSED", "ERR_NAME", "timeout"]):
             return (False, LOGIN_ERR_NETWORK, None, "", "")
+        if err == LOGIN_ERR_CREDENTIALS:
+            return (False, LOGIN_ERR_CREDENTIALS, None, "", "")
         return (False, LOGIN_ERR_AUTH, None, "", "")
 
     return (True, None, cookies, uid, name)

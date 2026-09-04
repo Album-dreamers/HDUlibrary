@@ -58,7 +58,8 @@ class SessionManager:
         """Login: try cached cookies first, fall back to Playwright.
 
         Returns:
-            (success, error_type) where error_type is "network", "auth", or None.
+            (success, error_type) where error_type describes network, session,
+            authentication, or explicit credential failure.
         """
         self._cookie_login_network_err = False
 

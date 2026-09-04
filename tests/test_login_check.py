@@ -16,12 +16,21 @@ class _Config:
     def get_user_info(self):
         return {"login_name": "student", "password": "secret"}
 
+    def get_settings(self):
+        return {
+            "login_max_attempts": 3,
+            "login_retry_initial_delay_seconds": 0,
+            "login_retry_max_delay_seconds": 0,
+            "login_retry_jitter_ratio": 0,
+        }
+
 
 class _Session:
     def __init__(self, config, success=True, uid="410676", error=None):
         self.config = config
         self.success = success
         self.uid = uid
+        self._uid_outcome = uid
         self.name = "reader"
         self.error = error
         self.login_calls = 0
@@ -31,6 +40,7 @@ class _Session:
 
     def login(self):
         self.login_calls += 1
+        self.uid = self._uid_outcome
         return self.success, self.error
 
 
