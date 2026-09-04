@@ -6,6 +6,7 @@ Usage:
     python main.py --cli            # CLI mode (terminal interface)
     python main.py --daemon         # Daemon mode (no menu, reads config and runs)
     python main.py --once           # One booking window, then exit (for CI)
+    python main.py --check-login     # Validate login and UID without booking
     python main.py -c path/to/config.yaml  # Custom config path
 """
 
@@ -68,6 +69,11 @@ def parse_args():
         "--once",
         action="store_true",
         help="Book the plans for two days from today, then exit (GitHub Actions mode)",
+    )
+    parser.add_argument(
+        "--check-login",
+        action="store_true",
+        help="Validate credentials and account UID, then exit without booking",
     )
     return parser.parse_args()
 
@@ -269,6 +275,54 @@ def run_daemon(config_path: str):
 # Seconds before the booking window to re-validate the session. A CI run may
 # wait hours between login and booking; the cached cookie can expire meanwhile.
 SESSION_REFRESH_LEAD = 300
+
+
+def run_login_check(config_path: str) -> int:
+    """Validate the library login and account identity without booking."""
+    from seathunter.logging_.logger import setup_logging
+    from seathunter.config.manager import ConfigManager
+    from seathunter.auth.session_manager import SessionManager
+    from seathunter.scheduler.one_shot import append_github_summary
+
+    logger = setup_logging()
+    logger.info("SeatHunter starting (login-check mode; no booking requests)")
+
+    config = ConfigManager(config_path)
+    config.load()
+    user = config.get_user_info()
+    if not user.get("login_name") or not user.get("password"):
+        message = "Credentials are missing (SCHOOL_ID or PASSWORD)."
+        logger.error(message)
+        append_github_summary(["## Login check failed", "", message])
+        return 1
+
+    session_mgr = SessionManager(config)
+    session_mgr.init_session()
+    success, error_type = session_mgr.login()
+    if not success or not session_mgr.uid:
+        reason = error_type or "session returned no uid"
+        logger.error("Login check failed: %s", reason)
+        append_github_summary([
+            "## Login check failed",
+            "",
+            f"- Reason: {reason}",
+            "- No booking request was sent.",
+        ])
+        return 1
+
+    logger.info(
+        "Login check passed: uid=%s, name=%s",
+        session_mgr.uid,
+        session_mgr.name or "(not returned)",
+    )
+    append_github_summary([
+        "## Login check passed",
+        "",
+        f"- UID: {session_mgr.uid}",
+        f"- Name: {session_mgr.name or '(not returned)'}",
+        "- No booking request was sent.",
+    ])
+    return 0
 
 
 def run_once(config_path: str) -> int:
@@ -483,7 +537,9 @@ def main():
     setup_path()
     args = parse_args()
 
-    if args.once:
+    if args.check_login:
+        sys.exit(run_login_check(args.config))
+    elif args.once:
         sys.exit(run_once(args.config))
     elif args.daemon:
         run_daemon(args.config)
