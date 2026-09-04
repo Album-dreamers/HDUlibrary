@@ -44,9 +44,9 @@ python build.py
 ## GitHub Actions 自动预约
 
 项目内置了 `.github/workflows/main.yml`。工作流每天北京时间 15:00
-启动，在 GitHub Runner 内等到 `booking_open_time`（19:51）开始发请求，抢
+启动，在 GitHub Runner 内等到 `booking_open_time`（19:55）开始发请求，抢
 两天后的座位，到 `booking_deadline`（20:15）收手退出。座位在 20:00 整放号，
-提前 9 分钟开打是为了让请求在放号瞬间已经在飞。
+提前 5 分钟开打是为了让请求在放号瞬间已经在飞。
 
 1. 先在本地运行 GUI，完成登录并添加真实的预约方案和调度。
 2. 将本地 `config/config.yaml` 中的 `plans`、`schedules` 复制到

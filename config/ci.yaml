@@ -31,10 +31,10 @@ settings:
   # Upper bound only; booking_deadline is what actually ends the run.
   max_try_times: 400
   auto_relogin: true
-  # Seats are released at 20:00 sharp. Start firing 9 minutes early so a
-  # request is already in flight the moment the window opens; this mirrors
-  # the pre-rewrite script, which fired from 19:51 until 20:15.
-  booking_open_time: "19:51:00"
+  # Seats are released at 20:00 sharp. Start 5 minutes early so a request is
+  # already in flight when the window opens, without spending long stretches
+  # of pointless traffic beforehand.
+  booking_open_time: "19:55:00"
   # Stop retrying at 20:15, as the pre-rewrite script did. A run dispatched
   # after this exits without booking instead of firing hopeless requests.
   booking_deadline: "20:15:00"
