@@ -38,6 +38,11 @@ settings:
   # Validate at 19:48. The second repository validates two minutes earlier so
   # the two accounts do not re-enter CAS together.
   session_refresh_lead_seconds: 720
+  # Retry transient CAS/session failures slowly instead of hammering login.
+  login_max_attempts: 3
+  login_retry_initial_delay_seconds: 30.0
+  login_retry_max_delay_seconds: 90.0
+  login_retry_jitter_ratio: 0.15
   # Never spend the request budget before seats are released.
   booking_open_time: "20:00:00"
   # Stop retrying at 20:15, as the pre-rewrite script did. A run dispatched
