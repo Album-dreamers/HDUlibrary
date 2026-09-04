@@ -11,41 +11,11 @@ import os
 import sys
 import logging
 from typing import Optional, Tuple, List, Dict
-from urllib.parse import urlsplit
 
 logger = logging.getLogger("seathunter.auth")
 
 LOGIN_ERR_NETWORK = "network"
 LOGIN_ERR_AUTH = "auth"
-
-
-def _safe_url(value: str) -> str:
-    """Drop query strings because CAS URLs can contain one-time tickets."""
-    parsed = urlsplit(value)
-    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-
-
-def _payload_summary(body: str) -> str:
-    """Describe an API response without dumping account data into CI logs."""
-    try:
-        data = json.loads(body)
-    except Exception:
-        preview = " ".join(str(body).split())[:240]
-        return f"non-json length={len(body)} preview={preview!r}"
-
-    if not isinstance(data, dict):
-        return f"json-type={type(data).__name__}"
-
-    details = [f"keys={sorted(str(key) for key in data.keys())}"]
-    payload = data.get("data")
-    if isinstance(payload, dict):
-        details.append(f"data_keys={sorted(str(key) for key in payload.keys())}")
-    else:
-        details.append(f"data_type={type(payload).__name__}")
-    for key in ("CODE", "code", "MESSAGE", "message", "msg"):
-        if key in data:
-            details.append(f"{key}={str(data[key])[:160]!r}")
-    return " ".join(details)
 
 
 def playwright_login(username: str, password: str, library_url: str,
@@ -127,19 +97,7 @@ def playwright_login(username: str, password: str, library_url: str,
                     pass
 
             if not username_input:
-                try:
-                    page_text = " ".join(
-                        (await page.locator("body").inner_text(timeout=3000)).split()
-                    )[:400]
-                except Exception:
-                    page_text = "(unavailable)"
-                logger.error(
-                    "[DEBUG-logincheck-form] Could not find username input; "
-                    "url=%s title=%r body=%r",
-                    _safe_url(page.url),
-                    await page.title(),
-                    page_text,
-                )
+                logger.error("Could not find username input field")
                 await browser.close()
                 return False, None, "", "", "auth"
 
@@ -193,13 +151,8 @@ def playwright_login(username: str, password: str, library_url: str,
                 await asyncio.sleep(5)
 
             current_url = page.url
-            logger.info(
-                "[DEBUG-logincheck-redirect] Final login page: url=%s title=%r",
-                _safe_url(current_url),
-                await page.title(),
-            )
             if "huitu.zhishulib.com" not in current_url:
-                logger.error("Login may have failed, current URL: %s", _safe_url(current_url))
+                logger.error("Login may have failed, current URL: %s", current_url)
                 await browser.close()
                 return False, None, "", "", "auth"
 
@@ -211,42 +164,17 @@ def playwright_login(username: str, password: str, library_url: str,
             logger.info("Fetching user info...")
             uid = ""
             name = ""
-            resp_info = {}
-            fetch_error = ""
             try:
-                resp_info = await page.evaluate("""async () => {
-                    try {
-                        const resp = await fetch("/Seat/Index/searchSeats?space_category[category_id]=591&space_category[content_id]=3&LAB_JSON=1");
-                        return {
-                            status: resp.status,
-                            url: resp.url,
-                            redirected: resp.redirected,
-                            contentType: resp.headers.get("content-type") || "",
-                            body: await resp.text(),
-                        };
-                    } catch (error) {
-                        return {error: String(error), body: ""};
-                    }
+                resp_text = await page.evaluate("""async () => {
+                    const resp = await fetch("/Seat/Index/searchSeats?space_category[category_id]=591&space_category[content_id]=3&LAB_JSON=1");
+                    return await resp.text();
                 }""")
-                resp_text = resp_info.get("body", "")
                 data = json.loads(resp_text)
                 if isinstance(data, dict) and data.get("data"):
                     uid = str(data["data"].get("uid", ""))
                     name = data["data"].get("uname", "")
-            except Exception as exc:
-                fetch_error = str(exc)
-                logger.warning("Failed to get user info from browser: %s", exc)
-
-            if not uid:
-                logger.warning(
-                    "[DEBUG-logincheck-userinfo] Browser user-info response: "
-                    "status=%s redirected=%s url=%s content-type=%r %s",
-                    resp_info.get("status", "error"),
-                    resp_info.get("redirected", "unknown"),
-                    _safe_url(resp_info.get("url", "")),
-                    resp_info.get("contentType", ""),
-                    _payload_summary(resp_info.get("body", "")) if resp_info else fetch_error,
-                )
+            except Exception as e:
+                logger.warning("Failed to get user info from browser: %s", e)
 
             if not uid:
                 for c in lib_cookies:

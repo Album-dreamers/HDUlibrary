@@ -13,7 +13,6 @@ import requests
 
 from seathunter.auth.cookie_store import CookieStore
 from seathunter.auth.playwright_login import playwright_login, LOGIN_ERR_NETWORK
-from seathunter.auth.playwright_login import _payload_summary
 from seathunter.config.manager import ConfigManager
 from seathunter.platform_.paths import get_config_path
 
@@ -174,12 +173,11 @@ class SessionManager:
                         return True
                 logger.warning(
                     "User-info validation attempt %d/%d returned no uid "
-                    "(status=%s, content-type=%s, [DEBUG-logincheck-http] %s)",
+                    "(status=%s, content-type=%s)",
                     attempt,
                     attempts,
                     getattr(resp, "status_code", "unknown"),
                     getattr(resp, "headers", {}).get("Content-Type", "unknown"),
-                    _payload_summary(getattr(resp, "text", "")),
                 )
             except Exception as exc:
                 logger.warning(
