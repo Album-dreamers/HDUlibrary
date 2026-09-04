@@ -219,7 +219,7 @@ class BurstIntervalTests(unittest.TestCase):
 
 
 class ProductionPacingTests(unittest.TestCase):
-    def test_ci_cadence_stays_above_observed_four_second_limit(self):
+    def test_ci_uses_one_second_priority_cadence(self):
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "config", "ci.yaml"
         )
@@ -227,9 +227,10 @@ class ProductionPacingTests(unittest.TestCase):
         manager.load()
         settings = manager.get_settings()
 
-        self.assertGreaterEqual(float(settings["burst_interval"]), 4.2)
-        self.assertGreaterEqual(float(settings["interval"]), 4.2)
-        self.assertLessEqual(float(settings["rate_limit_probe_interval"]), 1.0)
+        self.assertEqual(float(settings["burst_interval"]), 1.0)
+        self.assertEqual(float(settings["interval"]), 1.0)
+        self.assertEqual(float(settings["rate_limit_probe_interval"]), 1.0)
+        self.assertEqual(float(settings["retry_jitter_ratio"]), 0.0)
 
 
 class PreciseWaitTests(unittest.TestCase):
