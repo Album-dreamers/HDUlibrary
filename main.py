@@ -511,7 +511,9 @@ def run_once(config_path: str) -> int:
         burst_interval=settings.get("burst_interval"),
         burst_from=settings.get("burst_from"),
         burst_to=settings.get("burst_to"),
-        rate_limit_max_interval=float(settings.get("rate_limit_max_interval", 12.0)),
+        rate_limit_probe_interval=float(
+            settings.get("rate_limit_probe_interval", 1.0)
+        ),
         retry_jitter_ratio=float(settings.get("retry_jitter_ratio", 0.15)),
     )
     history = HistoryLogger()

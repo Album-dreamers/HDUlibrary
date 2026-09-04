@@ -36,7 +36,7 @@ class BookingRunner:
                  burst_interval: Optional[float] = None,
                  burst_from: Optional[str] = None,
                  burst_to: Optional[str] = None,
-                 rate_limit_max_interval: float = 12.0,
+                 rate_limit_probe_interval: float = 1.0,
                  retry_jitter_ratio: float = 0.15):
         self.api = api_client
         self.session_mgr = session_manager
@@ -45,9 +45,10 @@ class BookingRunner:
         self.burst_interval = burst_interval
         self.burst_from = _parse_time(burst_from)
         self.burst_to = _parse_time(burst_to)
-        self.rate_limit_max_interval = max(float(rate_limit_max_interval), 0.0)
+        self.rate_limit_probe_interval = max(
+            float(rate_limit_probe_interval), 0.01
+        )
         self.retry_jitter_ratio = max(float(retry_jitter_ratio), 0.0)
-        self._adaptive_interval = 0.0
         self._cancelled = False
 
     def current_interval(self) -> float:
@@ -72,28 +73,20 @@ class BookingRunner:
         )
 
     def retry_delay(self, results: List[BookingResult]) -> float:
-        """Return a smooth, jittered delay based on the latest responses.
+        """Return an evidence-based, jittered delay for the next request.
 
-        Rate-limit responses multiplicatively increase the delay.  Ordinary
-        responses release the penalty gradually instead of snapping back to a
-        burst, which avoids synchronized request spikes from multiple runners.
+        Captured server traces show that an admitted request consumes roughly
+        four seconds of capacity, while a rejected rate-limit probe does not
+        restart that timer. Probe briefly after a rejection; use the safe
+        admitted-request cadence after every other response.
         """
-        base = max(float(self.current_interval()), 0.01)
-        cap = max(self.rate_limit_max_interval, base)
         if any(self._is_rate_limited(result) for result in results):
-            previous = max(self._adaptive_interval, base)
-            self._adaptive_interval = min(
-                cap,
-                max(base * 2.0, previous * 2.0),
-            )
+            base = self.rate_limit_probe_interval
         else:
-            previous = max(self._adaptive_interval, base)
-            self._adaptive_interval = max(base, previous * 0.75)
+            base = max(float(self.current_interval()), 0.01)
 
-        jitter = random.uniform(
-            0.0, self._adaptive_interval * self.retry_jitter_ratio
-        )
-        return min(cap, self._adaptive_interval + jitter)
+        jitter = random.uniform(0.0, base * self.retry_jitter_ratio)
+        return base + jitter
 
     def _interruptible_sleep_until(self, deadline: float) -> None:
         """Wait for a monotonic deadline without accumulating response time.
@@ -127,7 +120,6 @@ class BookingRunner:
             List of BookingResult for all attempts.
         """
         self._cancelled = False
-        self._adaptive_interval = 0.0
         results = []
         next_request_not_before = None
 

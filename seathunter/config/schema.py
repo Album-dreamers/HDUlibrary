@@ -22,7 +22,7 @@ settings:
   login_retry_initial_delay_seconds: 30.0
   login_retry_max_delay_seconds: 90.0
   login_retry_jitter_ratio: 0.15
-  rate_limit_max_interval: 12.0
+  rate_limit_probe_interval: 1.0
   retry_jitter_ratio: 0.15
 
 api:

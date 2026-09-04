@@ -149,45 +149,42 @@ class BurstIntervalTests(unittest.TestCase):
             fake.now.return_value = datetime(2026, 9, 2, 20, 5, 0)
             self.assertEqual(runner.current_interval(), 5)
 
-    def test_rate_limit_uses_smooth_exponential_backoff(self):
+    def test_rate_limit_uses_short_probe_without_extending_cooldown(self):
         runner = self._runner(
-            interval=1.0,
-            rate_limit_max_interval=8.0,
+            interval=4.2,
+            rate_limit_probe_interval=1.0,
             retry_jitter_ratio=0.0,
         )
         limited = BookingResult(success=False, code="1", message="请求太频繁了，请稍后再试")
 
-        self.assertEqual(runner.retry_delay([limited]), 2.0)
-        self.assertEqual(runner.retry_delay([limited]), 4.0)
-        self.assertEqual(runner.retry_delay([limited]), 8.0)
+        self.assertEqual(runner.retry_delay([limited]), 1.0)
+        self.assertEqual(runner.retry_delay([limited]), 1.0)
+        self.assertEqual(runner.retry_delay([limited]), 1.0)
 
-    def test_normal_response_gradually_releases_rate_limit_penalty(self):
+    def test_admitted_response_restores_observed_safe_cadence(self):
         runner = self._runner(
-            interval=1.0,
-            rate_limit_max_interval=8.0,
+            interval=4.2,
+            rate_limit_probe_interval=1.0,
             retry_jitter_ratio=0.0,
         )
         limited = BookingResult(success=False, code="1", message="请求太频繁了，请稍后再试")
         ordinary = BookingResult(success=False, code="ParamError", message="座位暂不可用")
-        runner.retry_delay([limited])
-        runner.retry_delay([limited])
 
-        self.assertEqual(runner.retry_delay([ordinary]), 3.0)
+        self.assertEqual(runner.retry_delay([limited]), 1.0)
+        self.assertEqual(runner.retry_delay([ordinary]), 4.2)
 
-    def test_jitter_never_exceeds_the_configured_rate_limit_cap(self):
+    def test_probe_jitter_stays_within_configured_ratio(self):
         runner = self._runner(
-            interval=1.0,
-            rate_limit_max_interval=8.0,
+            interval=4.2,
+            rate_limit_probe_interval=1.0,
             retry_jitter_ratio=0.5,
         )
         limited = BookingResult(success=False, code="429", message="Too Many Requests")
 
         with patch("seathunter.scheduler.booking_runner.random.uniform", side_effect=lambda low, high: high):
-            runner.retry_delay([limited])
-            runner.retry_delay([limited])
             delay = runner.retry_delay([limited])
 
-        self.assertLessEqual(delay, 8.0)
+        self.assertEqual(delay, 1.5)
 
     def test_retry_cadence_is_measured_from_request_start(self):
         """A slow response must not be followed by a full extra cadence wait."""
@@ -232,6 +229,7 @@ class ProductionPacingTests(unittest.TestCase):
 
         self.assertGreaterEqual(float(settings["burst_interval"]), 4.2)
         self.assertGreaterEqual(float(settings["interval"]), 4.2)
+        self.assertLessEqual(float(settings["rate_limit_probe_interval"]), 1.0)
 
 
 class PreciseWaitTests(unittest.TestCase):
