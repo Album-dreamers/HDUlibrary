@@ -44,7 +44,7 @@ python build.py
 ## GitHub Actions 自动预约
 
 项目内置了 `.github/workflows/main.yml`。工作流每天北京时间 15:00
-启动，先完成登录和 UID 验证，再在 GitHub Runner 内等待。19:55 验证会话，
+启动，先完成登录和 UID 验证，再在 GitHub Runner 内等待。19:48 验证会话，
 `booking_open_time`（20:00:00）到达后才发出第一个预约请求，抢两天后的座位，
 到 `booking_deadline`（20:15）收手退出。限流响应会触发带抖动的平滑退避，
 避免开放前请求消耗限流额度。
