@@ -364,6 +364,16 @@ def run_once(config_path: str) -> int:
         logger.error("Login failed: %s", error_type)
         append_github_summary(["## SeatHunter", "", f"Login failed: {error_type}"])
         return 1
+    if not session_mgr.uid:
+        # Seen in production: login reports success, cookies save, but the uid
+        # never arrives, and every booking is rejected with an empty message.
+        message = (
+            "Login succeeded but returned no uid; bookings cannot identify "
+            "the account. Check the credentials or the login flow."
+        )
+        logger.error(message)
+        append_github_summary(["## SeatHunter", "", message])
+        return 1
     logger.info("Login successful: uid=%s", session_mgr.uid)
 
     if datetime.now() < open_at:
@@ -383,6 +393,12 @@ def run_once(config_path: str) -> int:
                 logger.error("Session refresh failed: %s", error_type)
                 append_github_summary(
                     ["## SeatHunter", "", f"Session refresh failed: {error_type}"]
+                )
+                return 1
+            if not session_mgr.uid:
+                logger.error("Session refresh returned no uid; skipping booking")
+                append_github_summary(
+                    ["## SeatHunter", "", "Session refresh returned no uid"]
                 )
                 return 1
             logger.info("Session refreshed: uid=%s", session_mgr.uid)

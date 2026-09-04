@@ -79,6 +79,15 @@ class BookingRunner:
         self._cancelled = False
         results = []
 
+        # Without a uid the request cannot name a booker, so no number of
+        # retries can succeed. This is a certainty, not a probability.
+        if not self.session_mgr.uid:
+            logger.error(
+                "Session has no uid; a booking cannot identify the account. "
+                "Sending no requests."
+            )
+            return results
+
         for retry in range(self.max_try_times):
             if self._cancelled:
                 logger.info("Booking run cancelled")

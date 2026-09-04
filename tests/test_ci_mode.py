@@ -100,6 +100,13 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class _StubSession:
+    """Minimal stand-in for SessionManager in runner tests."""
+
+    def __init__(self, uid="410676"):
+        self.uid = uid
+
+
 class BurstIntervalTests(unittest.TestCase):
     def _runner(self, **kwargs):
         return BookingRunner(api_client=None, session_manager=None, **kwargs)
@@ -129,10 +136,40 @@ class BookingDeadlineTests(unittest.TestCase):
 
     def test_run_booking_stops_once_the_deadline_passes(self):
         runner = BookingRunner(
-            api_client=None, session_manager=None, interval=0, max_try_times=50,
+            api_client=None, session_manager=_StubSession(), interval=0,
+            max_try_times=50,
         )
         past = datetime.now() - timedelta(seconds=1)
         results = runner.run_booking(
             plans=[object()], target_date=datetime(2026, 9, 5), deadline=past,
         )
+        self.assertEqual(results, [])
+
+
+class TerminalStateTests(unittest.TestCase):
+    """Retries must stop only where another attempt provably cannot help."""
+
+    def _result(self, code, message):
+        return BookingResult.from_api_response({"CODE": code, "MESSAGE": message})
+
+    def test_booked_seat_is_success(self):
+        self.assertTrue(self._result("ok", "预约成功").success)
+
+    def test_existing_reservation_is_success(self):
+        self.assertTrue(self._result("ParamError", "已有预约，请勿重复预约！").success)
+
+    def test_seat_taken_keeps_retrying(self):
+        # Someone may release the seat, so this is not terminal.
+        taken = self._result("ParamError", "选择的座位无法预约，可能座位不可用或已经被其他人锁定或占用")
+        self.assertFalse(taken.success)
+
+    def test_network_error_keeps_retrying(self):
+        self.assertFalse(self._result("error", "Connection reset").success)
+
+    def test_failure_string_carries_the_code(self):
+        self.assertIn("CODE=ParamError", str(self._result("ParamError", "boom")))
+
+    def test_missing_uid_sends_no_requests(self):
+        runner = BookingRunner(api_client=None, session_manager=_StubSession(""))
+        results = runner.run_booking(plans=[object()], target_date=datetime(2026, 9, 6))
         self.assertEqual(results, [])

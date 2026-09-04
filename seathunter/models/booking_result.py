@@ -26,7 +26,10 @@ class BookingResult:
             parts.append(f"座位: {self.room_name}-{self.seat_num}")
         if self.target_date:
             parts.append(f"日期: {self.target_date}")
-        parts.append(self.message)
+        if self.success:
+            parts.append(self.message)
+        else:
+            parts.append(f"{self.message} (CODE={self.code})")
         return " | ".join(parts)
 
     @classmethod
