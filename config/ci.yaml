@@ -35,6 +35,9 @@ settings:
   # so booking_deadline remains the effective stop condition.
   max_try_times: 2000
   auto_relogin: true
+  # Validate the session five minutes before opening. The second repository
+  # uses a different lead so the two accounts do not re-enter CAS together.
+  session_refresh_lead_seconds: 300
   # Never spend the request budget before seats are released.
   booking_open_time: "20:00:00"
   # Stop retrying at 20:15, as the pre-rewrite script did. A run dispatched

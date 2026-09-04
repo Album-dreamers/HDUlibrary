@@ -17,6 +17,7 @@ settings:
   max_try_times: 10
   auto_relogin: true
   booking_open_time: "20:00:00"
+  session_refresh_lead_seconds: 300
   rate_limit_max_interval: 12.0
   retry_jitter_ratio: 0.15
 

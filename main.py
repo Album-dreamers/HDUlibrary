@@ -339,6 +339,7 @@ def run_once(config_path: str) -> int:
         append_github_summary,
         booking_open_at,
         collect_plan_ids,
+        session_refresh_at,
         target_date_for_run,
         wait_until,
     )
@@ -437,7 +438,10 @@ def run_once(config_path: str) -> int:
         # The runner starts hours early to absorb the Actions dispatch delay,
         # so refresh the session just before firing rather than booking with
         # a cookie obtained hours ago.
-        refresh_at = open_at - timedelta(seconds=SESSION_REFRESH_LEAD)
+        refresh_at = session_refresh_at(
+            open_at,
+            float(settings.get("session_refresh_lead_seconds", SESSION_REFRESH_LEAD)),
+        )
         if datetime.now() < refresh_at:
             wait_until(refresh_at)
             success, error_type = session_mgr.login()

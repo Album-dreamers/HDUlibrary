@@ -49,6 +49,13 @@ def booking_open_at(now: datetime, open_time: str,
     )
 
 
+def session_refresh_at(open_at: datetime, lead_seconds: float) -> datetime:
+    """Return a configurable pre-opening session validation time."""
+    if lead_seconds < 0:
+        raise ValueError("settings.session_refresh_lead_seconds cannot be negative")
+    return open_at - timedelta(seconds=lead_seconds)
+
+
 def wait_until(target: datetime, log_interval: int = 60,
                precision: float = 0.01,
                now: Optional[Callable[[], datetime]] = None,

@@ -38,6 +38,7 @@ schedules:
 settings:
   interval: 0
   max_try_times: 3
+  session_refresh_lead_seconds: 60
   booking_open_time: "{open_time}"
   booking_deadline: "{deadline}"
 api:
