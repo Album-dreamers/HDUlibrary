@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from seathunter.config.manager import ConfigManager
@@ -187,6 +188,50 @@ class BurstIntervalTests(unittest.TestCase):
             delay = runner.retry_delay([limited])
 
         self.assertLessEqual(delay, 8.0)
+
+    def test_retry_cadence_is_measured_from_request_start(self):
+        """A slow response must not be followed by a full extra cadence wait."""
+        api = SimpleNamespace(
+            book_seat=lambda *args: {
+                "CODE": "ParamError",
+                "MESSAGE": "seat temporarily unavailable",
+            }
+        )
+        plan = SimpleNamespace(
+            id="daily",
+            begin_time="10:00:00",
+            duration_hours=11,
+            seats=[SimpleNamespace(seat_id="62561", seat_num="421")],
+            room_name="custom",
+        )
+        runner = BookingRunner(
+            api_client=api,
+            session_manager=_StubSession(),
+            interval=4.2,
+            max_try_times=2,
+            retry_jitter_ratio=0.0,
+        )
+
+        with patch(
+            "seathunter.scheduler.booking_runner.time.monotonic",
+            side_effect=[100.0, 104.2],
+        ), patch.object(runner, "_interruptible_sleep_until") as wait_until:
+            runner.run_booking([plan], datetime(2026, 9, 6))
+
+        wait_until.assert_called_once_with(104.2)
+
+
+class ProductionPacingTests(unittest.TestCase):
+    def test_ci_cadence_stays_above_observed_four_second_limit(self):
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "config", "ci.yaml"
+        )
+        manager = ConfigManager(config_path)
+        manager.load()
+        settings = manager.get_settings()
+
+        self.assertGreaterEqual(float(settings["burst_interval"]), 4.2)
+        self.assertGreaterEqual(float(settings["interval"]), 4.2)
 
 
 class PreciseWaitTests(unittest.TestCase):

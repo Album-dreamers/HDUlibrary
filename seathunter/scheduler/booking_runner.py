@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from datetime import datetime
-from time import sleep
 from typing import List, Callable, Optional
 
 from seathunter.api.client import ApiClient
@@ -95,12 +95,17 @@ class BookingRunner:
         )
         return min(cap, self._adaptive_interval + jitter)
 
-    def _interruptible_sleep(self, seconds: float) -> None:
-        remaining = max(float(seconds), 0.0)
-        while remaining > 0 and not self._cancelled:
-            step = min(remaining, 0.1)
-            sleep(step)
-            remaining -= step
+    def _interruptible_sleep_until(self, deadline: float) -> None:
+        """Wait for a monotonic deadline without accumulating response time.
+
+        The configured interval is a minimum distance between request starts,
+        not an extra delay added after the server finishes responding.
+        """
+        while not self._cancelled:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 0.1))
 
     def cancel(self):
         """Cancel the current booking run."""
@@ -124,6 +129,7 @@ class BookingRunner:
         self._cancelled = False
         self._adaptive_interval = 0.0
         results = []
+        next_request_not_before = None
 
         # Without a uid the request cannot name a booker, so no number of
         # retries can succeed. This is a certainty, not a probability.
@@ -139,6 +145,9 @@ class BookingRunner:
                 logger.info("Booking run cancelled")
                 break
 
+            if next_request_not_before is not None:
+                self._interruptible_sleep_until(next_request_not_before)
+
             if deadline is not None and datetime.now() >= deadline:
                 logger.info("Booking deadline %s reached, stopping",
                             deadline.strftime("%H:%M:%S"))
@@ -149,11 +158,19 @@ class BookingRunner:
             logger.info("Booking attempt %d/%d for %s",
                        retry + 1, self.max_try_times,
                        target_date.strftime("%Y-%m-%d"))
-            round_results = []
-
             for i, plan in enumerate(plans):
                 if self._cancelled:
                     break
+
+                # Multiple plans share the same booking endpoint and limiter.
+                # Pace every POST, including plans within the same retry round.
+                if i > 0 and next_request_not_before is not None:
+                    self._interruptible_sleep_until(next_request_not_before)
+                    if deadline is not None and datetime.now() >= deadline:
+                        logger.info("Booking deadline %s reached, stopping",
+                                    deadline.strftime("%H:%M:%S"))
+                        self._cancelled = True
+                        break
 
                 # Build the actual datetime for the plan
                 hour, minute, second = (int(x) for x in plan.begin_time.split(":"))
@@ -163,9 +180,9 @@ class BookingRunner:
                 seat_ids = [s.seat_id for s in plan.seats]
                 booker_uids = [self.session_mgr.uid] * len(plan.seats)
 
+                request_started_at = time.monotonic()
                 result = self._book_single_plan(plan, begin_time, seat_ids, booker_uids, target_date)
                 results.append(result)
-                round_results.append(result)
 
                 if on_result:
                     on_result(result)
@@ -188,13 +205,19 @@ class BookingRunner:
 
                 logger.warning("Plan %s failed: %s", plan.id, result.message)
 
+                # Anchor the next slot to this request's start. A two-second
+                # response with a 4.2-second cadence therefore waits about
+                # 2.2 more seconds instead of needlessly waiting 4.2 seconds.
+                retry_interval = self.retry_delay([result])
+                next_request_not_before = request_started_at + retry_interval
+                logger.info(
+                    "Next booking request no earlier than %.3fs after this "
+                    "request started",
+                    retry_interval,
+                )
+
                 if self._cancelled:
                     break
-
-            if not self._cancelled and retry < self.max_try_times - 1:
-                wait_seconds = self.retry_delay(round_results)
-                logger.info("Waiting %.3fs before retry", wait_seconds)
-                self._interruptible_sleep(wait_seconds)
 
         return results
 

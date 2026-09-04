@@ -23,16 +23,16 @@ schedules:
     enabled: true
 
 settings:
-  interval: 2.0
-  # The first booking POST is held until 20:00:00.  Retry at most once per
-  # second during the opening burst; rate-limit responses back off smoothly.
-  burst_interval: 1.0
+  interval: 5.0
+  # Logs show that starts roughly two seconds apart alternate between accepted
+  # and rate-limited, while accepted starts are about 4.4 seconds apart. Hold
+  # the first POST until 20:00:00, then keep at least 4.2 seconds between starts.
+  burst_interval: 4.2
   burst_from: "20:00:00"
   burst_to: "20:05:00"
   rate_limit_max_interval: 12.0
   retry_jitter_ratio: 0.15
-  # Safety upper bound; 2000 one-second attempts extend well past the deadline,
-  # so booking_deadline remains the effective stop condition.
+  # Safety upper bound; booking_deadline remains the effective stop condition.
   max_try_times: 2000
   auto_relogin: true
   # Validate at 19:48. The second repository validates two minutes earlier so
