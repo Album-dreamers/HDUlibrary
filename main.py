@@ -546,17 +546,17 @@ def run_once(config_path: str) -> int:
     if datetime.now() < open_at:
         wait_until(open_at)
     loop_ready_at = datetime.now()
-    results = runner.run_booking(
-        plans=plans,
-        target_date=target_date,
-        on_result=on_result,
-        deadline=deadline,
-    )
     logger.info(
         "Booking loop started at %s; local opening offset %.1fms "
         "(not server arrival time)",
         loop_ready_at.isoformat(timespec="milliseconds"),
         (loop_ready_at - open_at).total_seconds() * 1000,
+    )
+    results = runner.run_booking(
+        plans=plans,
+        target_date=target_date,
+        on_result=on_result,
+        deadline=deadline,
     )
     successful = next((result for result in results if result.success), None)
     if successful:
