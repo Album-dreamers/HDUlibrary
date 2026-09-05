@@ -12,6 +12,8 @@ import sys
 import logging
 from typing import Optional, Tuple, List, Dict
 
+from seathunter.auth.identity import normalize_uid
+
 logger = logging.getLogger("seathunter.auth")
 
 LOGIN_ERR_NETWORK = "network"
@@ -193,8 +195,8 @@ def playwright_login(username: str, password: str, library_url: str,
                     return await resp.text();
                 }""")
                 data = json.loads(resp_text)
-                if isinstance(data, dict) and data.get("data"):
-                    uid = str(data["data"].get("uid", ""))
+                if isinstance(data, dict) and isinstance(data.get("data"), dict):
+                    uid = normalize_uid(data["data"].get("uid"))
                     name = data["data"].get("uname", "")
             except Exception as e:
                 logger.warning("Failed to get user info from browser: %s", e)
@@ -202,7 +204,7 @@ def playwright_login(username: str, password: str, library_url: str,
             if not uid:
                 for c in lib_cookies:
                     if c["name"] == "uid":
-                        uid = c["value"]
+                        uid = normalize_uid(c["value"])
                         break
 
             logger.info("Got user info: uid=%s, name=%s", uid, name)

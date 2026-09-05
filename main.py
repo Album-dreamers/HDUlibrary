@@ -421,6 +421,16 @@ def run_once(config_path: str) -> int:
         ])
         return 1
 
+    logger.info(
+        "Booking policy: opens=%s; deadline=%s; interval=%.3fs; "
+        "burst=%s; rate-limit probe=%.3fs; max rounds=%s; one request at a time",
+        open_at.strftime("%H:%M:%S"),
+        deadline.strftime("%H:%M:%S") if deadline else "none",
+        float(settings["interval"]),
+        settings.get("burst_interval"),
+        float(settings.get("rate_limit_probe_interval", 1.0)),
+        settings["max_try_times"],
+    )
     session_mgr = SessionManager(config)
     session_mgr.init_session()
     success, error_type = login_with_retry(
@@ -500,9 +510,7 @@ def run_once(config_path: str) -> int:
         ])
         return 1
 
-    if datetime.now() < open_at:
-        wait_until(open_at)
-
+    # Finish local setup before the opening boundary, including filesystem work.
     runner = BookingRunner(
         api_client=ApiClient(session_mgr),
         session_manager=session_mgr,
@@ -516,20 +524,39 @@ def run_once(config_path: str) -> int:
         ),
         retry_jitter_ratio=float(settings.get("retry_jitter_ratio", 0.15)),
     )
-    history = HistoryLogger()
+    try:
+        history = HistoryLogger()
+    except OSError as exc:
+        logger.warning("History unavailable; booking will continue: %s", exc)
+        history = None
 
     def on_result(result):
-        history.log(result)
+        nonlocal history
+        if history is not None:
+            try:
+                history.log(result)
+            except OSError as exc:
+                logger.warning("History write failed; booking will continue: %s", exc)
+                history = None
         if result.success:
             logger.info("Booking result: %s", result)
         else:
             logger.warning("Booking result: %s", result)
 
+    if datetime.now() < open_at:
+        wait_until(open_at)
+    loop_ready_at = datetime.now()
     results = runner.run_booking(
         plans=plans,
         target_date=target_date,
         on_result=on_result,
         deadline=deadline,
+    )
+    logger.info(
+        "Booking loop started at %s; local opening offset %.1fms "
+        "(not server arrival time)",
+        loop_ready_at.isoformat(timespec="milliseconds"),
+        (loop_ready_at - open_at).total_seconds() * 1000,
     )
     successful = next((result for result in results if result.success), None)
     if successful:

@@ -73,12 +73,10 @@ class BookingRunner:
         )
 
     def retry_delay(self, results: List[BookingResult]) -> float:
-        """Return an evidence-based, jittered delay for the next request.
+        """Choose the configured cadence for ordinary or rate-limited results.
 
-        Captured server traces show that an admitted request consumes roughly
-        four seconds of capacity, while a rejected rate-limit probe does not
-        restart that timer. Probe briefly after a rejection; use the safe
-        admitted-request cadence after every other response.
+        These are client policy settings, not a guarantee about the server's
+        quota or penalty rules. Production uses 0.5 seconds for both.
         """
         if any(self._is_rate_limited(result) for result in results):
             base = self.rate_limit_probe_interval
@@ -103,6 +101,26 @@ class BookingRunner:
     def cancel(self):
         """Cancel the current booking run."""
         self._cancelled = True
+
+    def _can_request(self, deadline: Optional[datetime]) -> bool:
+        if self._cancelled:
+            return False
+        if deadline is not None and datetime.now() >= deadline:
+            logger.info("Booking deadline %s reached, stopping",
+                        deadline.strftime("%H:%M:%S"))
+            return False
+        return True
+
+    def _wait_for_slot(self, slot: Optional[float],
+                       deadline: Optional[datetime]) -> bool:
+        if not self._can_request(deadline):
+            return False
+        if slot is not None:
+            if deadline is not None:
+                remaining = max(0.0, (deadline - datetime.now()).total_seconds())
+                slot = min(slot, time.monotonic() + remaining)
+            self._interruptible_sleep_until(slot)
+        return self._can_request(deadline)
 
     def run_booking(self, plans: List[Plan], target_date: datetime,
                     on_result: Optional[Callable[[BookingResult], None]] = None,
@@ -133,16 +151,7 @@ class BookingRunner:
             return results
 
         for retry in range(self.max_try_times):
-            if self._cancelled:
-                logger.info("Booking run cancelled")
-                break
-
-            if next_request_not_before is not None:
-                self._interruptible_sleep_until(next_request_not_before)
-
-            if deadline is not None and datetime.now() >= deadline:
-                logger.info("Booking deadline %s reached, stopping",
-                            deadline.strftime("%H:%M:%S"))
+            if not self._wait_for_slot(next_request_not_before, deadline):
                 break
 
             if on_attempt:
@@ -151,18 +160,10 @@ class BookingRunner:
                        retry + 1, self.max_try_times,
                        target_date.strftime("%Y-%m-%d"))
             for i, plan in enumerate(plans):
-                if self._cancelled:
-                    break
-
                 # Multiple plans share the same booking endpoint and limiter.
                 # Pace every POST, including plans within the same retry round.
-                if i > 0 and next_request_not_before is not None:
-                    self._interruptible_sleep_until(next_request_not_before)
-                    if deadline is not None and datetime.now() >= deadline:
-                        logger.info("Booking deadline %s reached, stopping",
-                                    deadline.strftime("%H:%M:%S"))
-                        self._cancelled = True
-                        break
+                if i > 0 and not self._wait_for_slot(next_request_not_before, deadline):
+                    return results
 
                 # Build the actual datetime for the plan
                 hour, minute, second = (int(x) for x in plan.begin_time.split(":"))
@@ -172,6 +173,10 @@ class BookingRunner:
                 seat_ids = [s.seat_id for s in plan.seats]
                 booker_uids = [self.session_mgr.uid] * len(plan.seats)
 
+                # Waiting, callbacks and preparation may cross the cutoff or
+                # receive a cancellation. Check again at the call boundary.
+                if not self._can_request(deadline):
+                    return results
                 request_started_at = time.monotonic()
                 result = self._book_single_plan(plan, begin_time, seat_ids, booker_uids, target_date)
                 results.append(result)
@@ -197,9 +202,8 @@ class BookingRunner:
 
                 logger.warning("Plan %s failed: %s", plan.id, result.message)
 
-                # Anchor the next slot to this request's start. A two-second
-                # response with a 4.2-second cadence therefore waits about
-                # 2.2 more seconds instead of needlessly waiting 4.2 seconds.
+                # Response time counts toward the cadence. A slow response
+                # never creates concurrent requests or a catch-up burst.
                 retry_interval = self.retry_delay([result])
                 next_request_not_before = request_started_at + retry_interval
                 logger.info(

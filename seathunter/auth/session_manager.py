@@ -12,6 +12,7 @@ from typing import Optional, Tuple, Dict
 import requests
 
 from seathunter.auth.cookie_store import CookieStore
+from seathunter.auth.identity import normalize_uid
 from seathunter.auth.playwright_login import playwright_login, LOGIN_ERR_NETWORK
 from seathunter.config.manager import ConfigManager
 from seathunter.platform_.paths import get_config_path
@@ -95,16 +96,19 @@ class SessionManager:
             url = self.base_url + "/Seat/Index/searchSeats"
             resp = self.session.get(url=url, params=params, timeout=15)
             data = resp.json()
-            if isinstance(data, dict) and data.get("data") and data["data"].get("uid"):
-                self.uid = str(data["data"]["uid"])
-                self.name = data["data"].get("uname", "")
+            account = data.get("data") if isinstance(data, dict) else None
+            uid = normalize_uid(account.get("uid")) if isinstance(account, dict) else ""
+            if uid:
+                self.uid = uid
+                self.name = account.get("uname", "")
                 self.session.cookies.update({"org_id": "104"})
                 logger.info("Cookie login successful: uid=%s, name=%s", self.uid, self.name)
                 return True
             else:
                 logger.info("Cookie validation failed, server returned: %s",
                            json_dumps_truncate(data, 200))
-        except (ConnectionResetError, ConnectionError, requests.exceptions.ConnectionError) as e:
+        except (ConnectionResetError, ConnectionError, requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
             logger.warning("Cookie validation network error: %s", e)
             self._cookie_login_network_err = True
             return False
@@ -130,7 +134,7 @@ class SessionManager:
         # Apply cookies to session
         cookie_dict = {c["name"]: c["value"] for c in cookies}
         self.session.cookies.update(cookie_dict)
-        self.uid = uid or ""
+        self.uid = normalize_uid(uid)
         self.name = name or ""
 
         # If uid not obtained from browser, try API
@@ -166,8 +170,8 @@ class SessionManager:
             try:
                 resp = self.session.get(url=url, params=params, timeout=15)
                 data = resp.json()
-                if isinstance(data, dict) and data.get("data"):
-                    uid = str(data["data"].get("uid", ""))
+                if isinstance(data, dict) and isinstance(data.get("data"), dict):
+                    uid = normalize_uid(data["data"].get("uid"))
                     if uid:
                         self.uid = uid
                         self.name = data["data"].get("uname", "")

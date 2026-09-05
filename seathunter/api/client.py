@@ -6,7 +6,7 @@ Extracted from killer.py:324-422.
 from __future__ import annotations
 
 import logging
-from time import sleep
+from time import sleep, monotonic
 from datetime import datetime, timedelta
 from typing import Dict, List, Any
 from urllib.parse import unquote
@@ -102,8 +102,12 @@ class ApiClient:
         self.session.headers["Api-Token"] = api_token
         # Content-Length kept for API compatibility (server-side anti-tampering check)
         self.session.headers["Content-Length"] = "114"
+        started_at = datetime.now()
+        started_tick = monotonic()
+        status = None
         try:
             resp = self.session.post(url=url, data=data, timeout=30)
+            status = resp.status_code
             return resp.json()
         except Exception as e:
             logger.error("Booking request failed: %s", e)
@@ -111,6 +115,12 @@ class ApiClient:
         finally:
             self.session.headers.pop("Api-Token", None)
             self.session.headers.pop("Content-Length", None)
+            logger.info(
+                "Booking HTTP call started at %s; elapsed %.1fms; HTTP status=%s",
+                started_at.isoformat(timespec="milliseconds"),
+                (monotonic() - started_tick) * 1000,
+                status,
+            )
 
     def get_floor_names(self, rooms: Dict, room_name: str) -> List[str]:
         """Get floor list for a room."""
