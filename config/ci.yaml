@@ -23,15 +23,15 @@ schedules:
     enabled: true
 
 settings:
-  interval: 1.0
+  interval: 0.5
   # Hold the first POST until 20:00:00, then prioritize the earliest possible
-  # booking opportunity with one attempt per second measured request-to-request.
-  burst_interval: 1.0
+  # booking opportunity with two attempts per second measured request-to-request.
+  burst_interval: 0.5
   burst_from: "20:00:00"
   burst_to: "20:05:00"
   # A rate-limited request did not reset the observed server cooldown, so probe
   # briefly instead of applying a long penalty after CODE=1/429.
-  rate_limit_probe_interval: 1.0
+  rate_limit_probe_interval: 0.5
   retry_jitter_ratio: 0.0
   # Safety upper bound; booking_deadline remains the effective stop condition.
   max_try_times: 2000
