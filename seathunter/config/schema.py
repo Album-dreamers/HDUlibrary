@@ -15,6 +15,7 @@ schedules: []
 settings:
   interval: 5
   max_try_times: 10
+  max_inflight: 1
   auto_relogin: true
   booking_open_time: "20:00:00"
   session_refresh_lead_seconds: 300

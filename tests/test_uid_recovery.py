@@ -79,6 +79,9 @@ class FakeRunner:
 
     instances = []
 
+    def prepare(self):
+        pass
+
     def __init__(self, api_client, session_manager, **kwargs):
         self.session_mgr = session_manager
         self.booked_with = None

@@ -6,8 +6,12 @@ Extracted from killer.py:324-422.
 from __future__ import annotations
 
 import logging
+import math
+import threading
+from copy import copy
+from email.utils import parsedate_to_datetime
 from time import sleep, monotonic
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any
 from urllib.parse import unquote
 
@@ -19,15 +23,55 @@ from seathunter.auth.session_manager import SessionManager
 logger = logging.getLogger("seathunter.api")
 
 
+def retry_after_seconds(value):
+    """Parse the server's Retry-After header, accepting seconds or an HTTP date."""
+    if value is None:
+        return None
+    try:
+        delay = float(value)
+    except (TypeError, ValueError):
+        try:
+            when = parsedate_to_datetime(str(value))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            delay = (when - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return max(0.0, delay) if math.isfinite(delay) else None
+
+
 class ApiClient:
     """Handles all HTTP interactions with the library booking API."""
 
     def __init__(self, session_manager: SessionManager):
         self.session_mgr = session_manager
+        self._session = None
 
     @property
     def session(self) -> requests.Session:
-        return self.session_mgr.session
+        return self._session if self._session is not None else self.session_mgr.session
+
+    def fork(self):
+        """Give a worker its own cookies, headers and reusable connection pool."""
+        client = ApiClient(self.session_mgr)
+        source = self.session
+        session = requests.Session()
+        session.headers = source.headers.copy()
+        session.headers.pop("Api-Token", None)
+        session.headers.pop("Content-Length", None)
+        session.cookies = source.cookies.copy()
+        session.params = copy(source.params)
+        session.proxies = source.proxies.copy()
+        session.auth = source.auth
+        session.trust_env = source.trust_env
+        session.verify = source.verify
+        session.cert = source.cert
+        client._session = session
+        return client
+
+    def close(self):
+        if self._session is not None:
+            self._session.close()
 
     @property
     def base_url(self) -> str:
@@ -90,36 +134,61 @@ class ApiClient:
         return rooms
 
     def book_seat(self, begin_time: datetime, duration_hours: int,
-                  seat_ids: List[str], booker_uids: List[str]) -> Dict:
+                  seat_ids: List[str], booker_uids: List[str], *, before_send=None,
+                  can_send=None) -> Dict:
         """Execute a single booking attempt.
 
         Returns the raw API response dict.
         """
+        if before_send is not None and not before_send():
+            return {"CODE": "not_sent", "MESSAGE": "Stopped before POST"}
+        # A limiter may wait for many seconds. Sign only after admission, so
+        # api_time describes this attempt instead of an expired queue entry.
         data, api_token = generate_booking_data(
             begin_time, duration_hours, seat_ids, booker_uids
         )
         url = self.base_url + "/Seat/Index/bookSeats"
-        self.session.headers["Api-Token"] = api_token
-        # Content-Length kept for API compatibility (server-side anti-tampering check)
-        self.session.headers["Content-Length"] = "114"
+        # Tokens belong to one payload, never to shared mutable session headers.
+        # Requests calculates Content-Length from the actual encoded body.
+        headers = {"Api-Token": api_token, "Content-Length": None}
+        if can_send is not None and not can_send():
+            return {"CODE": "not_sent", "MESSAGE": "Stopped during request preparation"}
         started_at = datetime.now()
         started_tick = monotonic()
         status = None
+        logger.info("Booking POST dispatch: %s; worker=%s",
+                    started_at.isoformat(timespec="milliseconds"), threading.current_thread().name)
         try:
-            resp = self.session.post(url=url, data=data, timeout=30)
+            # Redirects can silently resubmit a POST and bypass the global gate.
+            resp = self.session.post(url=url, data=data, headers=headers,
+                                     timeout=(3.05, 30), allow_redirects=False)
             status = resp.status_code
-            return resp.json()
+            delay = retry_after_seconds(resp.headers.get("Retry-After"))
+            try:
+                result = resp.json()
+            except ValueError:
+                result = {}
+            if not isinstance(result, dict):
+                result = {}
+            if status == 429:
+                result = {"CODE": "429", "MESSAGE": "Too Many Requests"}
+            elif not 200 <= status < 300:
+                result = {"CODE": str(status), "MESSAGE": f"Booking HTTP status {status}"}
+            elif not result:
+                result = {"CODE": "error", "MESSAGE": "Booking response was not a JSON object"}
+            if delay is not None:
+                result["_retry_after_seconds"] = delay
+            return result
         except Exception as e:
             logger.error("Booking request failed: %s", e)
             return {"CODE": "error", "MESSAGE": str(e)}
         finally:
-            self.session.headers.pop("Api-Token", None)
-            self.session.headers.pop("Content-Length", None)
             logger.info(
-                "Booking HTTP call started at %s; elapsed %.1fms; HTTP status=%s",
+                "Booking HTTP call started at %s; elapsed %.1fms; HTTP status=%s; worker=%s",
                 started_at.isoformat(timespec="milliseconds"),
                 (monotonic() - started_tick) * 1000,
                 status,
+                threading.current_thread().name,
             )
 
     def get_floor_names(self, rooms: Dict, room_name: str) -> List[str]:

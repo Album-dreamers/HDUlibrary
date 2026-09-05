@@ -31,7 +31,7 @@ class OneShotTimingTests(unittest.TestCase):
     release = datetime(2026, 9, 5, 20, 0, 0)
 
     def _run(self, start, login_results=None, booking_results=None,
-             history_error=False, history_init_error=False):
+             history_error=False, history_init_error=False, runner_results=None):
         clock = _Clock(start)
         setup_events = []
         posts = []
@@ -90,7 +90,10 @@ class OneShotTimingTests(unittest.TestCase):
         def make_runner(**kwargs):
             setup_events.append(("runner", clock.now()))
             clock.sleep(0.2)
-            return BookingRunner(**kwargs)
+            runner = BookingRunner(**kwargs)
+            if runner_results is not None:
+                runner.run_booking = Mock(return_value=runner_results)
+            return runner
 
         history = Mock()
         if history_error:
@@ -186,6 +189,17 @@ class OneShotTimingTests(unittest.TestCase):
         )
         self.assertEqual(result.code, 0)
         self.assertEqual(result.posts, [self.release])
+
+    def test_summary_prefers_creation_receipt_over_earlier_existing_response(self):
+        from seathunter.models.booking_result import BookingResult
+        result = self._run(self.release - timedelta(seconds=2), runner_results=[
+            BookingResult(True, "ParamError", "已有预约"),
+            BookingResult(True, "ok", "created", plan_id="daily", seat_num="421", room_name="room"),
+        ])
+        self.assertEqual(result.code, 0)
+        summary = result.summary.call_args.args[0]
+        self.assertEqual(summary[0], "## SeatHunter booking created")
+        self.assertIn("- Seat: room-421", summary)
 
 
 if __name__ == "__main__":

@@ -423,13 +423,14 @@ def run_once(config_path: str) -> int:
 
     logger.info(
         "Booking policy: opens=%s; deadline=%s; interval=%.3fs; "
-        "burst=%s; rate-limit probe=%.3fs; max rounds=%s; one request at a time",
+        "burst=%s; rate-limit probe=%.3fs; max rounds=%s; max in-flight=%s",
         open_at.strftime("%H:%M:%S"),
         deadline.strftime("%H:%M:%S") if deadline else "none",
         float(settings["interval"]),
         settings.get("burst_interval"),
         float(settings.get("rate_limit_probe_interval", 1.0)),
         settings["max_try_times"],
+        settings.get("max_inflight", 1),
     )
     session_mgr = SessionManager(config)
     session_mgr.init_session()
@@ -523,7 +524,9 @@ def run_once(config_path: str) -> int:
             settings.get("rate_limit_probe_interval", 1.0)
         ),
         retry_jitter_ratio=float(settings.get("retry_jitter_ratio", 0.15)),
+        max_inflight=settings.get("max_inflight", 1),
     )
+    runner.prepare()
     try:
         history = HistoryLogger()
     except OSError as exc:
@@ -558,7 +561,11 @@ def run_once(config_path: str) -> int:
         on_result=on_result,
         deadline=deadline,
     )
-    successful = next((result for result in results if result.success), None)
+    # A concurrent request may see "already reserved" before the actual creator
+    # finishes returning. Prefer the explicit creation receipt after draining.
+    successful = next((result for result in results if result.created_by_this_run), None)
+    if successful is None:
+        successful = next((result for result in results if result.success), None)
     if successful:
         if successful.already_reserved:
             append_github_summary([

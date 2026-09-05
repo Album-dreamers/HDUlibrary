@@ -37,7 +37,10 @@ class BookingRunner:
                  burst_from: Optional[str] = None,
                  burst_to: Optional[str] = None,
                  rate_limit_probe_interval: float = 1.0,
-                 retry_jitter_ratio: float = 0.15):
+                 retry_jitter_ratio: float = 0.15,
+                 max_inflight: int = 1):
+        if type(max_inflight) is not int or not 1 <= max_inflight <= 4:
+            raise ValueError("max_inflight must be an integer from 1 to 4")
         self.api = api_client
         self.session_mgr = session_manager
         self.interval = interval
@@ -50,6 +53,19 @@ class BookingRunner:
         )
         self.retry_jitter_ratio = max(float(retry_jitter_ratio), 0.0)
         self._cancelled = False
+        self.max_inflight = max_inflight
+        self._pool = None
+
+    def prepare(self):
+        """Prepare isolated workers before the opening time without logging in."""
+        if self.max_inflight > 1 and self._pool is None:
+            from seathunter.scheduler.paced_booking import BookingPool
+            self._pool = BookingPool(self)
+
+    def close(self):
+        if self._pool is not None:
+            self._pool.close()
+            self._pool = None
 
     def current_interval(self) -> float:
         """Seconds to wait before the next attempt.
@@ -76,7 +92,8 @@ class BookingRunner:
         """Choose the configured cadence for ordinary or rate-limited results.
 
         These are client policy settings, not a guarantee about the server's
-        quota or penalty rules. Production uses 0.5 seconds for both.
+        quota or penalty rules. The serial path adds the configured jitter;
+        the bounded worker pool uses a shared admission gate.
         """
         if any(self._is_rate_limited(result) for result in results):
             base = self.rate_limit_probe_interval
@@ -101,6 +118,8 @@ class BookingRunner:
     def cancel(self):
         """Cancel the current booking run."""
         self._cancelled = True
+        if self._pool is not None:
+            self._pool.stop()
 
     def _can_request(self, deadline: Optional[datetime]) -> bool:
         if self._cancelled:
@@ -148,7 +167,18 @@ class BookingRunner:
                 "Session has no uid; a booking cannot identify the account. "
                 "Sending no requests."
             )
+            self.close()
             return results
+
+        if self.max_inflight > 1 and len(plans) == 1:
+            self.prepare()
+            try:
+                return self._pool.run(plans[0], target_date, on_result, on_attempt, deadline)
+            finally:
+                self.close()
+        # Never race different seat plans: two successes could reserve two seats.
+        # Multiple plans retain the original ordered, serial fallback behavior.
+        self.close()
 
         for retry in range(self.max_try_times):
             if not self._wait_for_slot(next_request_not_before, deadline):
@@ -206,6 +236,11 @@ class BookingRunner:
                 # never creates concurrent requests or a catch-up burst.
                 retry_interval = self.retry_delay([result])
                 next_request_not_before = request_started_at + retry_interval
+                if result.retry_after_seconds is not None:
+                    next_request_not_before = max(
+                        next_request_not_before,
+                        time.monotonic() + result.retry_after_seconds,
+                    )
                 logger.info(
                     "Next booking request no earlier than %.3fs after this "
                     "request started",
@@ -219,10 +254,15 @@ class BookingRunner:
 
     def _book_single_plan(self, plan: Plan, begin_time: datetime,
                           seat_ids: List[str], booker_uids: List[str],
-                          target_date: datetime) -> BookingResult:
+                          target_date: datetime, api=None, before_send=None,
+                          can_send=None) -> BookingResult:
         """Execute a single booking attempt for one plan."""
         try:
-            resp = self.api.book_seat(begin_time, plan.duration_hours, seat_ids, booker_uids)
+            client = api if api is not None else self.api
+            kwargs = {"before_send": before_send} if before_send is not None else {}
+            if can_send is not None:
+                kwargs["can_send"] = can_send
+            resp = client.book_seat(begin_time, plan.duration_hours, seat_ids, booker_uids, **kwargs)
             return BookingResult.from_api_response(
                 resp,
                 plan_id=plan.id,

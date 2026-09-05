@@ -16,6 +16,7 @@ class BookingResult:
     seat_num: Optional[str] = None
     room_name: Optional[str] = None
     target_date: Optional[str] = None
+    retry_after_seconds: Optional[float] = None
 
     @property
     def already_reserved(self) -> bool:
@@ -62,4 +63,5 @@ class BookingResult:
             seat_num=seat_num,
             room_name=room_name,
             target_date=target_date,
+            retry_after_seconds=resp.get("_retry_after_seconds"),
         )

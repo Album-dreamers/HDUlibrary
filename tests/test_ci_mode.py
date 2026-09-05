@@ -219,7 +219,7 @@ class BurstIntervalTests(unittest.TestCase):
 
 
 class ProductionPacingTests(unittest.TestCase):
-    def test_ci_uses_half_second_priority_cadence(self):
+    def test_ci_uses_a_short_bounded_opening_burst(self):
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "config", "ci.yaml"
         )
@@ -227,11 +227,14 @@ class ProductionPacingTests(unittest.TestCase):
         manager.load()
         settings = manager.get_settings()
 
-        self.assertEqual(float(settings["burst_interval"]), 0.5)
+        self.assertEqual(float(settings["burst_interval"]), 0.1)
+        self.assertEqual(settings["burst_from"], "20:00:00")
+        self.assertEqual(settings["burst_to"], "20:00:10")
+        self.assertEqual(settings["max_inflight"], 4)
         self.assertEqual(float(settings["interval"]), 0.5)
-        self.assertEqual(float(settings["rate_limit_probe_interval"]), 0.5)
+        self.assertEqual(float(settings["rate_limit_probe_interval"]), 1.0)
         self.assertEqual(float(settings["retry_jitter_ratio"]), 0.0)
-        self.assertGreaterEqual(int(settings["max_try_times"]), 1801)
+        self.assertGreaterEqual(int(settings["max_try_times"]), 1880)
 
 
 class PreciseWaitTests(unittest.TestCase):
