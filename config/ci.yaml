@@ -6,20 +6,20 @@ user:
   org_id: "104"
 
 plans:
-  - id: "daily_seat_416"
+  - id: "daily_seat_62085"
     room_name: "自定义"
     floor_name: "自定义"
     begin_time: "10:00:00"
     duration_hours: 11
     seats:
-      - seat_id: "62556"
-        seat_num: "416"
+      - seat_id: "62085"
+        seat_num: "seat_62085"
 
 # target_weekdays uses 1=Monday through 7=Sunday for the target seat date.
 schedules:
   - mode: weekdays
     target_weekdays: [1, 2, 3, 4, 5, 6, 7]
-    plan_ids: ["daily_seat_416"]
+    plan_ids: ["daily_seat_62085"]
     enabled: true
 
 settings:
